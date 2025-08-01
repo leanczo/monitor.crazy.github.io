@@ -168,12 +168,17 @@
             width: 150px;
         }
 
-        input[type="number"] {
-            width: 60px;
+        input[type="number"], select {
+            width: 100px;
             padding: 5px;
             border-radius: 5px;
             border: 1px solid rgba(255,255,255,0.3);
             background: rgba(255,255,255,0.1);
+            color: white;
+        }
+
+        select option {
+            background: #333;
             color: white;
         }
     </style>
@@ -198,8 +203,17 @@
                 <input type="number" id="alertTime" value="20" min="5" max="120">
             </div>
             <div class="setting-item">
-                <label>Sensibilidad de detección:</label>
-                <input type="range" id="sensitivity" min="0.3" max="0.9" step="0.1" value="0.6">
+                <label>Sensibilidad de movimiento:</label>
+                <input type="range" id="sensitivity" min="1" max="10" step="1" value="5">
+            </div>
+            <div class="setting-item">
+                <label>Modo de detección:</label>
+                <select id="detectionMode">
+                    <option value="smart">Inteligente (recomendado)</option>
+                    <option value="touch">Solo actividad táctil</option>
+                    <option value="motion">Solo movimiento</option>
+                    <option value="strict">Estricto (ambos)</option>
+                </select>
             </div>
         </div>
 
@@ -237,115 +251,184 @@
         const faceIndicator = document.getElementById('faceIndicator');
         const alertTimeInput = document.getElementById('alertTime');
         const sensitivityInput = document.getElementById('sensitivity');
+        const detectionModeSelect = document.getElementById('detectionMode');
 
         async function initCamera() {
+            // Ya no necesitamos cámara, solo mostramos un placeholder
             video = document.getElementById('video');
-            canvas = document.createElement('canvas');
-            ctx = canvas.getContext('2d');
-
-            // Verificar si estamos en HTTPS o localhost
-            const isSecure = location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
             
-            if (!isSecure) {
-                alert('⚠️ IMPORTANTE: Esta app necesita HTTPS para acceder a la cámara.\n\nOpciones:\n1. Súbela a GitHub Pages (gratis)\n2. Usa Chrome con --unsafely-treat-insecure-origin-as-secure\n3. Crea un servidor HTTPS local');
-                return false;
-            }
-
-            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-                alert('Tu navegador no soporta acceso a la cámara');
-                return false;
-            }
-
-            try {
-                mediaStream = await navigator.mediaDevices.getUserMedia({
-                    video: { 
-                        facingMode: 'user',
-                        width: { ideal: 640 },
-                        height: { ideal: 480 }
-                    },
-                    audio: false
-                });
-                video.srcObject = mediaStream;
-                
-                video.addEventListener('loadedmetadata', () => {
-                    canvas.width = video.videoWidth;
-                    canvas.height = video.videoHeight;
-                });
-                
-                return true;
-            } catch (err) {
-                console.error('Error accediendo a la cámara:', err);
-                let errorMsg = 'No se pudo acceder a la cámara.\n\n';
-                
-                if (err.name === 'NotAllowedError') {
-                    errorMsg += 'Permisos denegados. Haz clic en el ícono de cámara en la barra de direcciones y permite el acceso.';
-                } else if (err.name === 'NotFoundError') {
-                    errorMsg += 'No se encontró ninguna cámara en tu dispositivo.';
-                } else if (err.name === 'NotReadableError') {
-                    errorMsg += 'La cámara está siendo usada por otra aplicación.';
-                } else {
-                    errorMsg += `Error: ${err.message}`;
-                }
-                
-                alert(errorMsg);
-                return false;
-            }
+            // Crear un canvas con un indicador visual
+            const canvas = document.createElement('canvas');
+            canvas.width = 200;
+            canvas.height = 150;
+            const ctx = canvas.getContext('2d');
+            
+            // Crear gradiente de fondo
+            const gradient = ctx.createLinearGradient(0, 0, 200, 150);
+            gradient.addColorStop(0, '#667eea');
+            gradient.addColorStop(1, '#764ba2');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, 200, 150);
+            
+            // Dibujar icono de sensores
+            ctx.fillStyle = 'white';
+            ctx.font = '48px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('📱', 100, 80);
+            
+            ctx.fillStyle = 'rgba(255,255,255,0.8)';
+            ctx.font = '12px Arial';
+            ctx.fillText('Sensores Activos', 100, 110);
+            
+            // Reemplazar video con canvas
+            video.style.display = 'none';
+            const container = video.parentElement;
+            container.appendChild(canvas);
+            
+            return true;
         }
 
-        function detectFace() {
-            if (!video || !canvas || !isMonitoring) return;
-
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        // Variables para sensores
+        let lastMotion = Date.now();
+        let screenOrientation = 'portrait';
+        let isScreenOn = true;
+        let touchActivity = Date.now();
+        let baselineLight = null;
+        
+        function initSensors() {
+            // 1. Detector de movimiento (acelerómetro/giroscopio)
+            if (window.DeviceMotionEvent) {
+                window.addEventListener('devicemotion', handleMotion);
+            }
             
-            // Detección simple basada en cambios de píxeles y patrones faciales básicos
-            const faceDetected = simpleFaceDetection(imageData);
+            // 2. Detector de orientación
+            if (window.DeviceOrientationEvent) {
+                window.addEventListener('deviceorientation', handleOrientation);
+            }
             
-            if (faceDetected) {
-                handleFaceDetected();
+            // 3. Detector de actividad táctil
+            document.addEventListener('touchstart', handleTouch);
+            document.addEventListener('touchmove', handleTouch);
+            document.addEventListener('click', handleTouch);
+            document.addEventListener('scroll', handleTouch);
+            document.addEventListener('keydown', handleTouch);
+            
+            // 4. Detector de visibilidad de página
+            document.addEventListener('visibilitychange', handleVisibilityChange);
+            
+            // 5. Sensor de luz ambiental (si está disponible)
+            if ('AmbientLightSensor' in window) {
+                try {
+                    const sensor = new AmbientLightSensor();
+                    sensor.addEventListener('reading', handleLightChange);
+                    sensor.start();
+                } catch (err) {
+                    console.log('Sensor de luz no disponible');
+                }
+            }
+            
+            console.log('Sensores inicializados');
+        }
+        
+        function handleMotion(event) {
+            const acceleration = event.accelerationIncludingGravity;
+            if (acceleration) {
+                const totalAccel = Math.abs(acceleration.x) + Math.abs(acceleration.y) + Math.abs(acceleration.z);
+                if (totalAccel > 1) { // Umbral de movimiento
+                    lastMotion = Date.now();
+                }
+            }
+        }
+        
+        function handleOrientation(event) {
+            const orientation = Math.abs(event.gamma) > Math.abs(event.beta) ? 'landscape' : 'portrait';
+            if (orientation !== screenOrientation) {
+                screenOrientation = orientation;
+                lastMotion = Date.now(); // Cambio de orientación = actividad
+            }
+        }
+        
+        function handleTouch() {
+            touchActivity = Date.now();
+        }
+        
+        function handleVisibilityChange() {
+            isScreenOn = !document.hidden;
+            if (isScreenOn) {
+                touchActivity = Date.now();
+            }
+        }
+        
+        function handleLightChange(event) {
+            if (baselineLight === null) {
+                baselineLight = event.reading.illuminance;
+            }
+            // Cambios significativos de luz pueden indicar que el teléfono se acercó a la cara
+            const lightChange = Math.abs(event.reading.illuminance - baselineLight);
+            if (lightChange > 50) {
+                lastMotion = Date.now();
+            }
+        }
+        
+        function detectPhoneUsage() {
+            if (!isMonitoring) return;
+            
+            const now = Date.now();
+            const sensitivity = parseInt(sensitivityInput.value);
+            const motionThreshold = 3000 + (sensitivity * 500); // Más sensibilidad = menos tiempo
+            const touchThreshold = 1000 + (sensitivity * 200);
+            const mode = detectionModeSelect.value;
+            
+            // Criterios para determinar uso activo del celular
+            const hasRecentMotion = (now - lastMotion) < motionThreshold;
+            const hasRecentTouch = (now - touchActivity) < touchThreshold;
+            const screenIsVisible = isScreenOn;
+            
+            let isUsingPhone = false;
+            
+            switch (mode) {
+                case 'smart':
+                    isUsingPhone = screenIsVisible && (hasRecentTouch || hasRecentMotion);
+                    break;
+                case 'touch':
+                    isUsingPhone = screenIsVisible && hasRecentTouch;
+                    break;
+                case 'motion':
+                    isUsingPhone = screenIsVisible && hasRecentMotion;
+                    break;
+                case 'strict':
+                    isUsingPhone = screenIsVisible && hasRecentTouch && hasRecentMotion;
+                    break;
+            }
+            
+            if (isUsingPhone) {
+                handlePhoneUsageDetected();
             } else {
-                handleFaceNotDetected();
-            }
-
-            animationFrame = requestAnimationFrame(detectFace);
-        }
-
-        function simpleFaceDetection(imageData) {
-            // Algoritmo simple de detección facial basado en análisis de píxeles
-            const data = imageData.data;
-            const width = imageData.width;
-            const height = imageData.height;
-            
-            let skinPixels = 0;
-            let totalPixels = 0;
-            const sensitivity = parseFloat(sensitivityInput.value);
-            
-            // Buscar píxeles que podrían ser piel (rangos de color aproximados)
-            for (let i = 0; i < data.length; i += 4) {
-                const r = data[i];
-                const g = data[i + 1];
-                const b = data[i + 2];
-                
-                // Detección básica de tonos de piel
-                if (r > 95 && g > 40 && b > 20 && 
-                    r > g && r > b && 
-                    Math.abs(r - g) > 15) {
-                    skinPixels++;
-                }
-                totalPixels++;
+                handlePhoneUsageNotDetected();
             }
             
-            const skinRatio = skinPixels / (totalPixels / 4);
-            return skinRatio > sensitivity * 0.1; // Ajustable con el slider
+            // Log para debugging
+            if (Math.floor(now / 1000) % 5 === 0) { // Cada 5 segundos
+                console.log('Estado:', {
+                    usando: isUsingPhone,
+                    pantalla: screenIsVisible,
+                    movimiento: hasRecentMotion,
+                    toque: hasRecentTouch,
+                    ultimoMovimiento: Math.floor((now - lastMotion) / 1000) + 's',
+                    ultimoToque: Math.floor((now - touchActivity) / 1000) + 's'
+                });
+            }
+
+            animationFrame = requestAnimationFrame(detectPhoneUsage);
         }
 
-        function handleFaceDetected() {
+        function handlePhoneUsageDetected() {
             faceIndicator.classList.add('detected');
             
             if (!detectionStartTime) {
                 detectionStartTime = Date.now();
                 status.className = 'status monitoring';
-                status.innerHTML = '<div>Estado: Monitoreando uso del celular</div><div class="timer" id="timer">00:00</div>';
+                status.innerHTML = '<div>Estado: Detectando uso del celular</div><div class="timer" id="timer">00:00</div>';
             }
             
             updateTimer();
@@ -357,16 +440,19 @@
                 showAlert();
             } else if (elapsedSeconds >= alertTime - 5) {
                 status.className = 'status warning';
+                status.innerHTML = '<div>Estado: ⚠️ Casi tiempo límite</div><div class="timer" id="timer">' + 
+                    Math.floor(elapsedSeconds / 60).toString().padStart(2, '0') + ':' + 
+                    (elapsedSeconds % 60).toString().padStart(2, '0') + '</div>';
             }
         }
 
-        function handleFaceNotDetected() {
+        function handlePhoneUsageNotDetected() {
             faceIndicator.classList.remove('detected');
             
             if (detectionStartTime) {
                 detectionStartTime = null;
                 status.className = 'status';
-                status.innerHTML = '<div>Estado: Sin detección</div><div class="timer">00:00</div>';
+                status.innerHTML = '<div>Estado: Celular inactivo</div><div class="timer">00:00</div>';
             }
         }
 
@@ -406,16 +492,21 @@
         }
 
         async function startMonitoring() {
-            if (!mediaStream) {
-                const success = await initCamera();
-                if (!success) return;
-            }
+            const success = await initCamera();
+            if (!success) return;
+            
+            // Inicializar sensores
+            initSensors();
             
             isMonitoring = true;
             startBtn.disabled = true;
             stopBtn.disabled = false;
             
-            detectFace();
+            // Resetear variables
+            lastMotion = Date.now();
+            touchActivity = Date.now();
+            
+            detectPhoneUsage();
         }
 
         function stopMonitoring() {
