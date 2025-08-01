@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Detector de Uso de Celular</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: white;
+        }
+
+        .container {
+            max-width: 400px;
+            margin: 0 auto;
+            text-align: center;
+        }
+
+        .camera-container {
+            position: relative;
+            width: 200px;
+            height: 150px;
+            margin: 20px auto;
+            border-radius: 15px;
+            overflow: hidden;
+            border: 3px solid rgba(255,255,255,0.3);
+        }
+
+        #video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .controls {
+            margin: 20px 0;
+        }
+
+        button {
+            background: rgba(255,255,255,0.2);
+            border: 2px solid rgba(255,255,255,0.3);
+            color: white;
+            padding: 12px 24px;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 5px;
+            transition: all 0.3s ease;
+        }
+
+        button:hover {
+            background: rgba(255,255,255,0.3);
+            transform: translateY(-2px);
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .status {
+            margin: 20px 0;
+            padding: 15px;
+            border-radius: 10px;
+            background: rgba(255,255,255,0.1);
+        }
+
+        .status.monitoring {
+            background: rgba(76, 175, 80, 0.3);
+            border: 2px solid #4CAF50;
+        }
+
+        .status.warning {
+            background: rgba(255, 152, 0, 0.3);
+            border: 2px solid #FF9800;
+        }
+
+        .timer {
+            font-size: 24px;
+            font-weight: bold;
+            margin: 10px 0;
+        }
+
+        .alert-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(244, 67, 54, 0.95);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            animation: pulse 1s infinite;
+        }
+
+        .alert-content {
+            text-align: center;
+            color: white;
+        }
+
+        .alert-title {
+            font-size: 48px;
+            font-weight: bold;
+            margin-bottom: 20px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+        }
+
+        .alert-message {
+            font-size: 24px;
+            margin-bottom: 30px;
+        }
+
+        .alert-button {
+            background: white;
+            color: #f44336;
+            border: none;
+            padding: 15px 30px;
+            font-size: 20px;
+            border-radius: 25px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 0.9; }
+            50% { opacity: 1; }
+        }
+
+        .face-indicator {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #f44336;
+        }
+
+        .face-indicator.detected {
+            background: #4CAF50;
+            animation: blink 2s infinite;
+        }
+
+        @keyframes blink {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0.3; }
+        }
+
+        .settings {
+            margin: 20px 0;
+            text-align: left;
+        }
+
+        .setting-item {
+            margin: 10px 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        input[type="range"] {
+            width: 150px;
+        }
+
+        input[type="number"] {
+            width: 60px;
+            padding: 5px;
+            border-radius: 5px;
+            border: 1px solid rgba(255,255,255,0.3);
+            background: rgba(255,255,255,0.1);
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚫📱 Detector de Uso de Celular</h1>
+        
+        <div class="camera-container">
+            <video id="video" autoplay muted playsinline></video>
+            <div class="face-indicator" id="faceIndicator"></div>
+        </div>
+
+        <div class="controls">
+            <button id="startBtn">Iniciar Monitoreo</button>
+            <button id="stopBtn" disabled>Detener</button>
+        </div>
+
+        <div class="settings">
+            <div class="setting-item">
+                <label>Tiempo de alerta (segundos):</label>
+                <input type="number" id="alertTime" value="20" min="5" max="120">
+            </div>
+            <div class="setting-item">
+                <label>Sensibilidad de detección:</label>
+                <input type="range" id="sensitivity" min="0.3" max="0.9" step="0.1" value="0.6">
+            </div>
+        </div>
+
+        <div class="status" id="status">
+            <div>Estado: Detenido</div>
+            <div class="timer" id="timer">00:00</div>
+        </div>
+    </div>
+
+    <div class="alert-overlay" id="alertOverlay">
+        <div class="alert-content">
+            <div class="alert-title">⚠️ ¡DEJA EL CELULAR! ⚠️</div>
+            <div class="alert-message">Has estado usando el celular por demasiado tiempo</div>
+            <button class="alert-button" id="dismissAlert">Entendido</button>
+        </div>
+    </div>
+
+    <script>
+        let video;
+        let canvas;
+        let ctx;
+        let isMonitoring = false;
+        let detectionStartTime = null;
+        let alertTimer = null;
+        let animationFrame = null;
+        let mediaStream = null;
+
+        // Elementos del DOM
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const status = document.getElementById('status');
+        const timer = document.getElementById('timer');
+        const alertOverlay = document.getElementById('alertOverlay');
+        const dismissAlert = document.getElementById('dismissAlert');
+        const faceIndicator = document.getElementById('faceIndicator');
+        const alertTimeInput = document.getElementById('alertTime');
+        const sensitivityInput = document.getElementById('sensitivity');
+
+        async function initCamera() {
+            video = document.getElementById('video');
+            canvas = document.createElement('canvas');
+            ctx = canvas.getContext('2d');
+
+            // Verificar si estamos en HTTPS o localhost
+            const isSecure = location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+            
+            if (!isSecure) {
+                alert('⚠️ IMPORTANTE: Esta app necesita HTTPS para acceder a la cámara.\n\nOpciones:\n1. Súbela a GitHub Pages (gratis)\n2. Usa Chrome con --unsafely-treat-insecure-origin-as-secure\n3. Crea un servidor HTTPS local');
+                return false;
+            }
+
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                alert('Tu navegador no soporta acceso a la cámara');
+                return false;
+            }
+
+            try {
+                mediaStream = await navigator.mediaDevices.getUserMedia({
+                    video: { 
+                        facingMode: 'user',
+                        width: { ideal: 640 },
+                        height: { ideal: 480 }
+                    },
+                    audio: false
+                });
+                video.srcObject = mediaStream;
+                
+                video.addEventListener('loadedmetadata', () => {
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                });
+                
+                return true;
+            } catch (err) {
+                console.error('Error accediendo a la cámara:', err);
+                let errorMsg = 'No se pudo acceder a la cámara.\n\n';
+                
+                if (err.name === 'NotAllowedError') {
+                    errorMsg += 'Permisos denegados. Haz clic en el ícono de cámara en la barra de direcciones y permite el acceso.';
+                } else if (err.name === 'NotFoundError') {
+                    errorMsg += 'No se encontró ninguna cámara en tu dispositivo.';
+                } else if (err.name === 'NotReadableError') {
+                    errorMsg += 'La cámara está siendo usada por otra aplicación.';
+                } else {
+                    errorMsg += `Error: ${err.message}`;
+                }
+                
+                alert(errorMsg);
+                return false;
+            }
+        }
+
+        function detectFace() {
+            if (!video || !canvas || !isMonitoring) return;
+
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            
+            // Detección simple basada en cambios de píxeles y patrones faciales básicos
+            const faceDetected = simpleFaceDetection(imageData);
+            
+            if (faceDetected) {
+                handleFaceDetected();
+            } else {
+                handleFaceNotDetected();
+            }
+
+            animationFrame = requestAnimationFrame(detectFace);
+        }
+
+        function simpleFaceDetection(imageData) {
+            // Algoritmo simple de detección facial basado en análisis de píxeles
+            const data = imageData.data;
+            const width = imageData.width;
+            const height = imageData.height;
+            
+            let skinPixels = 0;
+            let totalPixels = 0;
+            const sensitivity = parseFloat(sensitivityInput.value);
+            
+            // Buscar píxeles que podrían ser piel (rangos de color aproximados)
+            for (let i = 0; i < data.length; i += 4) {
+                const r = data[i];
+                const g = data[i + 1];
+                const b = data[i + 2];
+                
+                // Detección básica de tonos de piel
+                if (r > 95 && g > 40 && b > 20 && 
+                    r > g && r > b && 
+                    Math.abs(r - g) > 15) {
+                    skinPixels++;
+                }
+                totalPixels++;
+            }
+            
+            const skinRatio = skinPixels / (totalPixels / 4);
+            return skinRatio > sensitivity * 0.1; // Ajustable con el slider
+        }
+
+        function handleFaceDetected() {
+            faceIndicator.classList.add('detected');
+            
+            if (!detectionStartTime) {
+                detectionStartTime = Date.now();
+                status.className = 'status monitoring';
+                status.innerHTML = '<div>Estado: Monitoreando uso del celular</div><div class="timer" id="timer">00:00</div>';
+            }
+            
+            updateTimer();
+            
+            const elapsedSeconds = Math.floor((Date.now() - detectionStartTime) / 1000);
+            const alertTime = parseInt(alertTimeInput.value);
+            
+            if (elapsedSeconds >= alertTime) {
+                showAlert();
+            } else if (elapsedSeconds >= alertTime - 5) {
+                status.className = 'status warning';
+            }
+        }
+
+        function handleFaceNotDetected() {
+            faceIndicator.classList.remove('detected');
+            
+            if (detectionStartTime) {
+                detectionStartTime = null;
+                status.className = 'status';
+                status.innerHTML = '<div>Estado: Sin detección</div><div class="timer">00:00</div>';
+            }
+        }
+
+        function updateTimer() {
+            if (detectionStartTime) {
+                const elapsed = Math.floor((Date.now() - detectionStartTime) / 1000);
+                const minutes = Math.floor(elapsed / 60);
+                const seconds = elapsed % 60;
+                const timerElement = document.getElementById('timer');
+                if (timerElement) {
+                    timerElement.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+                }
+            }
+        }
+
+        function showAlert() {
+            alertOverlay.style.display = 'flex';
+            
+            // Vibrar si está disponible
+            if (navigator.vibrate) {
+                navigator.vibrate([500, 200, 500, 200, 500]);
+            }
+            
+            // Sonido de alerta (opcional)
+            try {
+                const audio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmAaBDuF3ePMeCUCJXrE8NyJQAcTYrPh469ZGA5PlOLzwWEcCDaG4PDBek0HJXrL8NOHQAcSYrDr465ZGAhNnd/yx2EcBjOG3+fCd0wGLHfU9NSJQAgQXrvu5qlYGQ1Jm+D1z2EdCTaH4fDCeEwGJHfQ89uLQQYRYrTk5a5aGAxGnOH1z2IeBDOF3+LAd0wGKnTP89aLQQcTYbTr5q5aGApEnt7wx2IdBzaHOPDBe0wGK3jO8tuKQQgRX7Lo5qxaGApEm9/xx2IeBjeERfG/ek0GKnTO8tuKQQcUYbfr5a1aGglFnt3wx2MdBjeHOPDCek0GKnTN8dmKQQgUYbfn5axaGQlGnt3wx2MdBjSHOvLBeUwGKnLN8dmJQQgUYrfi5KtaGQpGnd3yx2EdBjWGOvDBe0wGKnLO8tmJQQcUYrXi5KtaGglFnt7wx2EdBzKHOvHBeUwGKnHO8tiJQQgUYrbi5KxaGQlGnt3wx2EdCDKGOvHBeUwGKXHO8tiJQQgUYbXi5KtaGglGnd3xx2MdBzOGOfHBeUwGKXLO8tiJQQgUYbTi5KtaGglGnd3xxmMdBzOGOfHBeUwGKXLN8tiJQQgUYbPi5KxaGglGnt3xxmMdCDKGOfHAeUwGKXLN8tiJQQgUYbPi5KxaGglFnt3xxmQdCDKGOfHAeUwGKXHN8tiJQQgUYbPh5KxaGQlGnt3xxmQdCDKGOPHAeUwGKXHN8diJQQgUYbPh5KxaGAlGnt3xxmQdCDOGOfHAeEwGKXHN8diJQQgUYLPh5KxaGAlGnt3xxmQdCDOGOfHAeEwGKHLN8diJQQgTYLPh5KxaGAlGnt3xxmQdCDOGOfHAeEwGKHHN8diJQQgTYLPh5KxaGAlGnt3xxmQdCDOGOfHAeEwGKHHN8diJQQgTYLPh5KxaGAlGnt3xxmQdCDOGOfHAeEwGKHHN8diJQQgTYLPh5KxaGAlGnt3xxmQdCDKGOfHAeEwGKHHN8diJQQgTYLPh5KxaGAlGnt3xxmQdCDKGOfHAeEwGKHHN8diJQQgTYLPh5KxaGAlGnt3xxmQdCDKGOfHAeEwGKHHN8diJQQgTYLPh5KxaGQlGnt3xxmQdCDKGOfHAeEwGKHHN8diJQQgTYLPh5KxaGQlGnt3xxmQdCDKGOfHAeEwGKHHN8diJQQgTYLPh5KxaGQlGnt3xxmQdCDKGOfHAeEwGKHHN8diJQQgTYLPh5KxaGQlGnt3xxmQdCDKGOfHAeEwGKHHN8diJQQgTYLPh5KxaGQlGnt3xxmQdCDKGOfHAeEwGKHHN8diJQQgTYLPh5KxaGQlGnt3xxmQdCDKGOfHAeEwGKHHN8diJQQgTYLPh5KxaGQlGnt3xxmQdCDKGOfHAeEwGKHHN8diJQQgTYLPh5KxaGQlGnt3xxmQdCDKGOfHAeEwGKHHN8diJQQgTYLPh5KxaGQlGnt3xxmQdCDKGOfHAeEwGKHHN8diJQQgTYLPh5KxaGQlGnt3xxmQdCDKGOfHAeEwGKHHN8diJQQgTYLPh5KxaGQlGnt3xxmQdCDKGOfHAeEwGKHHN8diJQQgTYLPh5KxaGQlGnt3xxmQdCDKGOfHAeEwGKHHN8diJQQgTYLPh5KxaGQlGnt3xxmQdCDKGOfHAeEwGKHHN8diJQQgTYLPh5KxaGQlGn');
+                audio.play().catch(() => {}); // Ignore errors if audio fails
+            } catch (e) {}
+            
+            // Resetear el timer
+            detectionStartTime = Date.now();
+        }
+
+        function hideAlert() {
+            alertOverlay.style.display = 'none';
+            detectionStartTime = Date.now(); // Resetear timer
+        }
+
+        async function startMonitoring() {
+            if (!mediaStream) {
+                const success = await initCamera();
+                if (!success) return;
+            }
+            
+            isMonitoring = true;
+            startBtn.disabled = true;
+            stopBtn.disabled = false;
+            
+            detectFace();
+        }
+
+        function stopMonitoring() {
+            isMonitoring = false;
+            detectionStartTime = null;
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            
+            if (animationFrame) {
+                cancelAnimationFrame(animationFrame);
+            }
+            
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(track => track.stop());
+                mediaStream = null;
+                video.srcObject = null;
+            }
+            
+            status.className = 'status';
+            status.innerHTML = '<div>Estado: Detenido</div><div class="timer">00:00</div>';
+            faceIndicator.classList.remove('detected');
+            hideAlert();
+        }
+
+        // Event listeners
+        startBtn.addEventListener('click', startMonitoring);
+        stopBtn.addEventListener('click', stopMonitoring);
+        dismissAlert.addEventListener('click', hideAlert);
+
+        // Cerrar alerta con Escape
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && alertOverlay.style.display === 'flex') {
+                hideAlert();
+            }
+        });
+
+        // Actualizar timer cada segundo
+        setInterval(() => {
+            if (detectionStartTime && isMonitoring) {
+                updateTimer();
+            }
+        }, 1000);
+    </script>
+</body>
+</html>
